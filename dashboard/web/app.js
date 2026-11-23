@@ -373,6 +373,81 @@ async function renderWatchlist() {
   }
 }
 
+/* ---------------------------------------------------------------- 持仓 */
+
+async function renderPositions() {
+  const tbl = $('posTable');
+  const sum = $('posSummary');
+  tbl.innerHTML = '<tr><td class="empty-note">加载中…</td></tr>';
+  try {
+    const d = await api('/api/positions');
+    const s = d.summary;
+    const cell = (k, v, color) => `<div class="pos-stat"><div class="k">${k}</div>
+      <div class="v" style="${color ? 'color:' + color : ''}">${v}</div></div>`;
+    sum.innerHTML =
+      cell('持仓只数', s.count) +
+      cell('平均浮盈', (s.avg_pl >= 0 ? '+' : '') + fmt(s.avg_pl) + '%',
+        s.avg_pl === 0 ? 'var(--dim)' : s.avg_pl > 0 ? 'var(--up)' : 'var(--down)') +
+      cell('总仓位', fmt(s.weight, 1) + '%', s.weight > 100 ? '#ff8a80' : '') +
+      cell('风险预警', s.alerts + ' 只', s.alerts ? '#ff8a80' : '#3ddc97');
+
+    if (!d.rows.length) {
+      tbl.innerHTML = '<tr><td class="empty-note">还没有持仓。上面填代码 + 成本价，建仓即锁定止损位。</td></tr>';
+      return;
+    }
+    let html = `<thead><tr>
+      <th>名称</th><th>成本</th><th>现价</th><th>盈亏</th><th>仓位</th>
+      <th>锁定止损</th><th>距止损</th><th>MA13 / MA55</th><th>当前模型</th><th>信号</th><th></th>
+    </tr></thead><tbody>`;
+    d.rows.forEach((r) => {
+      if (r.error) {
+        html += `<tr><td colspan="11" class="empty-note">${r.code} 读取失败：${r.error}</td></tr>`;
+        return;
+      }
+      const cls = r.tone === 'bad' ? 'alert-row' : '';
+      const over = r.weight > 20 ? ' over-cap' : '';
+      html += `<tr class="row ${cls}" data-code="${r.code}">
+        <td><b>${r.name}</b><div style="color:var(--dim2);font-size:11px" class="mono">${r.code} · ${r.entry_model}</div>
+          ${r.entry_warning ? `<div style="color:#fdb022;font-size:11px;margin-top:3px">⚠ ${r.entry_warning}</div>` : ''}</td>
+        <td class="mono">${fmt(r.cost)}</td>
+        <td class="mono">${fmt(r.close)}</td>
+        <td class="mono" style="color:${r.pl_pct >= 0 ? 'var(--up)' : 'var(--down)'}">${pct(r.pl_pct, 2)}</td>
+        <td class="mono${over}">${r.weight ? fmt(r.weight, 1) + '%' : '—'}</td>
+        <td class="mono">${fmt(r.exit_price)}</td>
+        <td class="mono" style="color:${r.dist_exit_pct > -3 ? '#ff8a80' : 'var(--dim)'}">${pct(r.dist_exit_pct, 1)}</td>
+        <td class="mono" style="color:var(--dim2)">${fmt(r.ma13)} / ${fmt(r.ma55)}</td>
+        <td style="font-size:12px">${r.model}<div style="color:var(--dim2);font-size:11px">${r.level}</div></td>
+        <td><span class="pill ${r.tone}">${r.status}</span>
+          <div style="color:var(--dim2);font-size:11px;margin-top:4px;max-width:220px">${r.action}</div></td>
+        <td><button class="ghost" data-close="${r.code}" style="padding:4px 9px;font-size:11.5px">平仓</button></td>
+      </tr>`;
+    });
+    html += '</tbody>';
+    tbl.innerHTML = html;
+
+    tbl.querySelectorAll('tr.row').forEach((tr) => {
+      tr.addEventListener('click', (e) => {
+        if (e.target.dataset.close) return;
+        switchTab('analysis');
+        $('codeInput').value = tr.dataset.code;
+        analyze(tr.dataset.code);
+      });
+    });
+    tbl.querySelectorAll('button[data-close]').forEach((b) => {
+      b.addEventListener('click', async () => {
+        await api('/api/positions', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: b.dataset.close, action: 'remove' }),
+        });
+        renderPositions();
+        toast('已移除持仓 ' + b.dataset.close);
+      });
+    });
+  } catch (e) {
+    tbl.innerHTML = `<tr><td class="empty-note">加载失败：${e.message}</td></tr>`;
+  }
+}
+
 /* ---------------------------------------------------------------- 交互 */
 
 function switchTab(name) {
@@ -382,6 +457,7 @@ function switchTab(name) {
   document.querySelectorAll('section.view').forEach((s) =>
     s.classList.toggle('active', s.id === 'view-' + name));
   if (name === 'watchlist') renderWatchlist();
+  if (name === 'positions') renderPositions();
   if (name === 'analysis' && STATE.data) drawChart(STATE.data.ctx);
 }
 
@@ -423,6 +499,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) { toast('加入失败：' + e.message); }
   });
   $('wlRefresh').addEventListener('click', renderWatchlist);
+
+  $('posAdd').addEventListener('click', async () => {
+    const code = $('posCode').value.trim();
+    const cost = parseFloat($('posCost').value);
+    const weight = parseFloat($('posWeight').value || '0');
+    if (!code || !cost) return toast('代码和成本价必填');
+    try {
+      const r = await api('/api/positions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, cost, weight, action: 'add' }),
+      });
+      toast(`已建仓 ${r.entry.name}：锁定止损 ${r.entry.entry_stop}`);
+      $('posCode').value = ''; $('posCost').value = ''; $('posWeight').value = '';
+      renderPositions();
+    } catch (e) { toast('建仓失败：' + e.message); }
+  });
 
   await loadWatchlist();
   await analyze(STATE.code);

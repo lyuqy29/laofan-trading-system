@@ -8,6 +8,8 @@
   GET  /api/compare?codes=a,b,c      多票对比排序
   GET  /api/watchlist                读自选
   POST /api/watchlist                增删自选 {"code":"600519","action":"add|remove"}
+  GET  /api/positions                持仓盯盘（浮盈/止损距离/离场信号）
+  POST /api/positions                增删持仓 {"code","cost","weight","action"}
   GET  /api/health
 """
 from __future__ import annotations
@@ -30,6 +32,7 @@ import models          # noqa: E402
 WEB = os.path.join(HERE, "web")
 DATA = os.path.join(HERE, "data")
 WATCHLIST = os.path.join(DATA, "watchlist.json")
+POSITIONS = os.path.join(DATA, "positions.json")
 CACHE_TTL = 90
 _cache = {}
 _cache_lock = threading.Lock()
@@ -109,6 +112,87 @@ def save_watchlist(codes: list[str]) -> None:
         json.dump(codes, f, ensure_ascii=False, indent=2)
 
 
+
+# ---------------------------------------------------------------- 持仓管理
+#
+# 口径（risk.md）：
+#   开仓时必须写明止损位 —— 建仓时把「结构位与 -12% 取先到者」落库，
+#   之后每天用现价对比这个已锁定的止损位，而不是随行情漂移。
+#   离场优先级：止损触发 > 跌破中期组清仓 > 跌破短期组减仓 > 止盈区 > 模型转弱。
+
+STATUS_ORDER = ["止损触发", "破位清仓", "减仓预警", "止盈区", "模型转弱", "持有"]
+
+
+def load_positions() -> list[dict]:
+    try:
+        with open(POSITIONS, encoding="utf-8") as f:
+            d = json.load(f)
+            return d if isinstance(d, list) else []
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def save_positions(rows: list[dict]) -> None:
+    os.makedirs(DATA, exist_ok=True)
+    with open(POSITIONS, "w", encoding="utf-8") as f:
+        json.dump(rows, f, ensure_ascii=False, indent=2)
+
+
+def position_state(pos: dict) -> dict:
+    """把一条持仓和最新行情合并成盯盘状态。"""
+    p = analyze(pos["code"])
+    ctx, plan = p["ctx"], p["result"]["plan"]
+    close = ctx["close"]
+    cost = float(pos["cost"])
+    weight = float(pos.get("weight") or 0)
+    exit_price = float(pos.get("entry_stop") or round(cost * 0.88, 2))
+    ma13, ma55 = ctx["ma"]["13"], ctx["ma"]["55"]
+    bias = ctx["bias60"]
+    has_model = plan["model"] != "无模型命中"
+
+    if close <= exit_price:
+        status, tone, action = "止损触发", "bad", f"现价已跌破 {exit_price:.2f}，按纪律无条件离场"
+    elif close < ma55:
+        status, tone, action = "破位清仓", "bad", f"跌破中期均线组 {ma55:.2f}（纪律：清仓）"
+    elif close < ma13:
+        status, tone, action = "减仓预警", "warn", f"跌破短期组 MA13 {ma13:.2f}（纪律：减仓）"
+    elif bias >= 30:
+        status, tone, action = "止盈区", "good", f"BIAS60 {bias:+.1f}%，进入 +30% 分批止盈区"
+    elif not has_model:
+        status, tone, action = "模型转弱", "warn", "当前无模型命中，按失效条件复核"
+    else:
+        status, tone, action = "持有", "good", f"{plan['model']} {plan['level']}，结构未破"
+
+    return {
+        "code": ctx["code"], "name": ctx["name"], "cost": cost, "weight": weight,
+        "close": close, "pl_pct": round((close / cost - 1) * 100, 2),
+        "pl_amount_hint": round((close - cost) * float(pos.get("shares") or 0), 2)
+        if pos.get("shares") else None,
+        "exit_price": round(exit_price, 2),
+        "exit_basis": pos.get("entry_stop_basis") or "开仓时锁定",
+        "entry_warning": pos.get("entry_warning"),
+        "dist_exit_pct": round((exit_price / close - 1) * 100, 2),
+        "entry_model": pos.get("entry_model") or "—",
+        "model": plan["model"], "level": plan["level"], "decision": plan["decision"],
+        "ma13": round(ma13, 2), "ma55": round(ma55, 2), "bias60": round(bias, 1),
+        "status": status, "tone": tone, "action": action,
+        "opened_at": pos.get("opened_at"),
+    }
+
+
+def positions_summary(rows: list[dict]) -> dict:
+    live = [r for r in rows if "error" not in r]
+    if not live:
+        return {"count": 0, "avg_pl": 0, "weight": 0, "alerts": 0, "over_cap": 0}
+    return {
+        "count": len(live),
+        "avg_pl": round(sum(r["pl_pct"] for r in live) / len(live), 2),
+        "weight": round(sum(r["weight"] for r in live), 1),
+        "alerts": len([r for r in live if r["tone"] == "bad"]),
+        "over_cap": len([r for r in live if r["weight"] > 20]),
+    }
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=WEB, **kw)
@@ -146,6 +230,16 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(compare(codes[:12]))
             if u.path == "/api/watchlist":
                 return self._json({"ok": True, "codes": load_watchlist()})
+            if u.path == "/api/positions":
+                rows = []
+                for pos in load_positions():
+                    try:
+                        rows.append(position_state(pos))
+                    except Exception as exc:  # noqa: BLE001
+                        rows.append({"code": pos.get("code"), "error": str(exc)})
+                rows.sort(key=lambda r: STATUS_ORDER.index(r["status"]) if "status" in r else 99)
+                return self._json({"ok": True, "rows": rows,
+                                   "summary": positions_summary(rows)})
             if u.path.startswith("/api/"):
                 return self._err("未知接口", 404)
         except (ValueError, RuntimeError) as exc:
@@ -157,22 +251,75 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
-        if u.path != "/api/watchlist":
+        if u.path not in ("/api/watchlist", "/api/positions"):
             return self._err("未知接口", 404)
         try:
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}")
             code = market.symbol_of(str(body.get("code", "")))[2:]
             action = body.get("action", "add")
-            codes = load_watchlist()
-            if action == "add" and code not in codes:
-                codes.append(code)
-            elif action == "remove":
-                codes = [c for c in codes if c != code]
-            save_watchlist(codes)
-            return self._json({"ok": True, "codes": codes})
         except Exception as exc:  # noqa: BLE001
-            return self._err(str(exc), 500)
+            return self._err(str(exc), 400)
+
+        if u.path == "/api/watchlist":
+            try:
+                codes = load_watchlist()
+                if action == "add" and code not in codes:
+                    codes.append(code)
+                elif action == "remove":
+                    codes = [c for c in codes if c != code]
+                save_watchlist(codes)
+                return self._json({"ok": True, "codes": codes})
+            except Exception as exc:  # noqa: BLE001
+                return self._err(str(exc), 500)
+
+        # ---- 持仓
+        try:
+            rows = load_positions()
+            if action == "remove":
+                rows = [r for r in rows if r.get("code") != code]
+                save_positions(rows)
+                return self._json({"ok": True, "rows": rows})
+
+            cost = float(body.get("cost") or 0)
+            if cost <= 0:
+                return self._err("成本价必须大于 0")
+            weight = float(body.get("weight") or 0)
+            if weight < 0 or weight > 100:
+                return self._err("仓位百分比需在 0—100 之间")
+            shares = body.get("shares")
+
+            # 建仓即锁定止损：结构位与 -12% 取先到者（risk.md）
+            p = analyze(code)
+            ctx, plan = p["ctx"], p["result"]["plan"]
+            struct = plan["stop"]["struct"]
+            static_stop = round(cost * 0.88, 2)
+            warning = None
+            if not struct or float(struct) >= cost * 0.97:
+                # 结构位不在成本下方 = 开仓时模型结构已失效，止损位失去意义
+                entry_stop = static_stop
+                basis = "12% 静态止损" + ("（结构位高于成本，模型已失效）" if struct else "")
+                if struct:
+                    warning = f"建仓时结构位 {float(struct):.2f} 高于成本 {cost:.2f}，模型已失效"
+            else:
+                entry_stop = round(max(float(struct), static_stop), 2)
+                basis = plan["stop"]["basis"]
+
+            entry = {
+                "code": ctx["code"], "name": ctx["name"], "cost": cost,
+                "weight": weight, "shares": float(shares) if shares else None,
+                "opened_at": body.get("opened_at") or time.strftime("%Y-%m-%d"),
+                "entry_stop": entry_stop, "entry_stop_basis": basis,
+                "entry_model": plan["model"], "entry_warning": warning,
+            }
+            rows = [r for r in rows if r.get("code") != code] + [entry]
+            save_positions(rows)
+            return self._json({"ok": True, "entry": entry, "rows": rows})
+        except (ValueError, RuntimeError) as exc:
+            return self._err(str(exc), 400)
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            return self._err(f"{type(exc).__name__}: {exc}", 500)
 
 
 def main():

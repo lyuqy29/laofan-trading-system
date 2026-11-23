@@ -28,6 +28,7 @@
 <nav class="tabs">
   <button class="active" data-view="analysis">单票分析</button>
   <button data-view="watchlist">自选对比</button>
+  <button data-view="positions">持仓管理</button>
   <button data-view="system">体系说明书</button>
 </nav>
 
@@ -136,6 +137,26 @@
       </div>
       <div style="overflow-x:auto"><table class="wl" id="wlTable"></table></div>
       <p class="empty-note" style="margin-top:12px">点击任意行进入单票分析；「—」表示该票未触发任何模型。</p>
+    </div>
+  </section>
+
+  <!-- ============ 持仓管理 ============ -->
+  <section class="view" id="view-positions">
+    <div class="card">
+      <h3>持仓盯盘 <span class="tag">开仓即锁定止损 · 每日对照离场纪律</span></h3>
+      <div class="pos-summary" id="posSummary"></div>
+      <div class="pos-form">
+        <input id="posCode" placeholder="代码 600519">
+        <input id="posCost" placeholder="成本价" inputmode="decimal">
+        <input id="posWeight" placeholder="仓位 %（可选）" inputmode="decimal">
+        <button class="primary" id="posAdd">建仓记录</button>
+      </div>
+      <div style="overflow-x:auto;margin-top:14px"><table class="wl" id="posTable"></table></div>
+      <p class="empty-note" style="margin-top:14px">
+        离场优先级：<b>止损触发</b>（现价 ≤ 开仓锁定的止损位）→ <b>破位清仓</b>（跌破 MA55）→
+        <b>减仓预警</b>（跌破 MA13）→ <b>止盈区</b>（BIAS60 ≥ +30%）→ <b>模型转弱</b>（当前无模型命中）。
+        单票仓位超过 20% 会标红，这是双十法则的硬上限。
+      </p>
     </div>
   </section>
 
