@@ -5,48 +5,64 @@
 - 入口：`liuliu-trading-system/SKILL.md`
 - 内容：九大交易模型、移动平均带三类买卖点、背离共振、止损与仓位、检查清单、交易计划模板
 
-## 方式一：一键安装（Windows）
+## 安装
 
-解压后，在解压目录右键「在终端中打开」，执行：
+### 一键安装
+
+macOS / Linux：
+
+```bash
+bash install-skill.sh              # 用户级：~/.dsh/skills
+bash install-skill.sh --project    # 项目级：当前目录 ./.dsh/skills
+bash install-skill.sh --force      # 覆盖已安装版本
+bash install-skill.sh --uninstall  # 卸载
+```
+
+Windows（PowerShell）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install-skill.ps1
+powershell -ExecutionPolicy Bypass -File .\install-skill.ps1 -Project
+powershell -ExecutionPolicy Bypass -File .\install-skill.ps1 -Force
+powershell -ExecutionPolicy Bypass -File .\install-skill.ps1 -Uninstall
 ```
 
-默认安装到 `%USERPROFILE%\.dsh\skills\liuliu-trading-system`。
+默认安装位置：
 
-## 方式二：手动复制（Windows / macOS / Linux 通用）
-
-把 `liuliu-trading-system` 整个文件夹复制到：
-
-| 系统 | 用户级目录（推荐） |
+| 系统 | 用户级目录 |
 |---|---|
-| Windows | `C:\Users\<你>\.dsh\skills\` |
-| macOS / Linux | `~/.dsh/skills/` |
+| Windows | `%USERPROFILE%\.dsh\skills\liuliu-trading-system` |
+| macOS / Linux | `~/.dsh/skills/liuliu-trading-system` |
 
-也支持项目级：复制到项目根目录的 `.dsh/skills/` 或 `.agents/skills/`，只在该项目生效。
+设置环境变量 `DSH_HOME` 可以改变用户级根目录。
 
-macOS / Linux 也可一键：
+### 手动安装
 
-```bash
-bash install-skill.sh
-```
+把 `SKILL.md`、`README.md`、`references/`、`assets/` 复制到 `<skills>/liuliu-trading-system/` 即可。
+`dashboard/` 是独立看板，**不需要**复制进 skills 目录。
 
 ## 验证
 
-1. 重启 DSH（或新开一个会话）。
-2. 在会话中问：「有哪些可用技能？」或直接说「用 liuliu-trading-system 分析……」。
-3. 如果技能列表里出现 `liuliu-trading-system`，即安装成功。
+1. 在会话中问「有哪些可用技能？」或直接说「用 liuliu-trading-system 分析……」。
+2. 技能列表里出现 `liuliu-trading-system` 即安装成功。
 
-若未出现：确认目录结构是 `<skills>/liuliu-trading-system/SKILL.md`（不是多套一层文件夹），且 `SKILL.md` 开头有 `---` 包裹的 `name` 与 `description`。
+目录是热加载的，通常无需重启；若列表没刷新，新开一个会话即可。
+
+若未出现：确认目录结构是 `<skills>/liuliu-trading-system/SKILL.md`（不是多套一层），且 `SKILL.md` 开头有 `---` 包裹的 `name` 与 `description`。
 
 ## 更新
 
-用新版本覆盖整个 `liuliu-trading-system` 文件夹即可（技能会在下次会话或文件变更后重新加载）。
+用新版本覆盖整个目录：
+
+```bash
+bash install-skill.sh --force
+```
 
 ## 卸载
 
-删除 `~/.dsh/skills/liuliu-trading-system` 文件夹。
+```bash
+bash install-skill.sh --uninstall
+```
 
 ## 配套看板
 
