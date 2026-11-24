@@ -39,6 +39,18 @@ _cache_lock = threading.Lock()
 
 DEFAULT_WATCHLIST = ["600519", "300750", "002594", "601127", "600030"]
 
+# 通用兜底文案：任何非 DataSourceError 的异常都只说这一句，
+# 细节（类型、堆栈、原始 message）只进服务端日志，永不出现在 web 界面。
+GENERIC_ERROR = "这次没算出来，请稍后重试或换一个代码"
+
+
+def user_error(exc: BaseException) -> str:
+    """把异常翻译成可以直接展示给用户的文案。"""
+    if isinstance(exc, market.DataSourceError):
+        return str(exc)
+    traceback.print_exc()
+    return GENERIC_ERROR
+
 
 def analyze(code: str) -> dict:
     key = code.strip().lower()
@@ -80,7 +92,7 @@ def compare(codes: list[str]) -> dict:
                 "score": p["result"]["models"][0]["score"] if p["result"]["models"] else 0,
             })
         except Exception as exc:  # noqa: BLE001
-            rows.append({"code": c, "error": str(exc)})
+            rows.append({"code": c, "error": user_error(exc)})
     ok = [r for r in rows if "error" not in r]
 
     def rank(r):
@@ -236,17 +248,15 @@ class Handler(SimpleHTTPRequestHandler):
                     try:
                         rows.append(position_state(pos))
                     except Exception as exc:  # noqa: BLE001
-                        rows.append({"code": pos.get("code"), "error": str(exc)})
+                        rows.append({"code": pos.get("code"), "error": user_error(exc)})
                 rows.sort(key=lambda r: STATUS_ORDER.index(r["status"]) if "status" in r else 99)
                 return self._json({"ok": True, "rows": rows,
                                    "summary": positions_summary(rows)})
             if u.path.startswith("/api/"):
                 return self._err("未知接口", 404)
-        except (ValueError, RuntimeError) as exc:
-            return self._err(str(exc), 400)
         except Exception as exc:  # noqa: BLE001
-            traceback.print_exc()
-            return self._err(f"{type(exc).__name__}: {exc}", 500)
+            return self._err(user_error(exc),
+                             400 if isinstance(exc, market.DataSourceError) else 500)
         return super().do_GET()
 
     def do_POST(self):
@@ -256,10 +266,16 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                return self._err("请求内容格式有误", 400)
             code = market.symbol_of(str(body.get("code", "")))[2:]
             action = body.get("action", "add")
-        except Exception as exc:  # noqa: BLE001
+        except market.DataSourceError as exc:
             return self._err(str(exc), 400)
+        except (ValueError, TypeError):
+            return self._err("请求内容格式有误", 400)
+        except Exception as exc:  # noqa: BLE001
+            return self._err(user_error(exc), 500)
 
         if u.path == "/api/watchlist":
             try:
@@ -271,7 +287,7 @@ class Handler(SimpleHTTPRequestHandler):
                 save_watchlist(codes)
                 return self._json({"ok": True, "codes": codes})
             except Exception as exc:  # noqa: BLE001
-                return self._err(str(exc), 500)
+                return self._err(user_error(exc), 500)
 
         # ---- 持仓
         try:
@@ -281,13 +297,16 @@ class Handler(SimpleHTTPRequestHandler):
                 save_positions(rows)
                 return self._json({"ok": True, "rows": rows})
 
-            cost = float(body.get("cost") or 0)
+            try:
+                cost = float(body.get("cost") or 0)
+                weight = float(body.get("weight") or 0)
+                shares = float(body.get("shares")) if body.get("shares") else None
+            except (TypeError, ValueError):
+                return self._err("成本价、仓位、股数都需要填数字", 400)
             if cost <= 0:
                 return self._err("成本价必须大于 0")
-            weight = float(body.get("weight") or 0)
             if weight < 0 or weight > 100:
                 return self._err("仓位百分比需在 0—100 之间")
-            shares = body.get("shares")
 
             # 建仓即锁定止损：结构位与 -12% 取先到者（risk.md）
             p = analyze(code)
@@ -307,7 +326,7 @@ class Handler(SimpleHTTPRequestHandler):
 
             entry = {
                 "code": ctx["code"], "name": ctx["name"], "cost": cost,
-                "weight": weight, "shares": float(shares) if shares else None,
+                "weight": weight, "shares": shares,
                 "opened_at": body.get("opened_at") or time.strftime("%Y-%m-%d"),
                 "entry_stop": entry_stop, "entry_stop_basis": basis,
                 "entry_model": plan["model"], "entry_warning": warning,
@@ -315,11 +334,9 @@ class Handler(SimpleHTTPRequestHandler):
             rows = [r for r in rows if r.get("code") != code] + [entry]
             save_positions(rows)
             return self._json({"ok": True, "entry": entry, "rows": rows})
-        except (ValueError, RuntimeError) as exc:
-            return self._err(str(exc), 400)
         except Exception as exc:  # noqa: BLE001
-            traceback.print_exc()
-            return self._err(f"{type(exc).__name__}: {exc}", 500)
+            return self._err(user_error(exc),
+                             400 if isinstance(exc, market.DataSourceError) else 500)
 
 
 def main():

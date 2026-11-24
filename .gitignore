@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
 dashboard/data/
+dashboard/logs/
+*.log
 .DS_Store

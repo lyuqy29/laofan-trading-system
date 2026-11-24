@@ -6,6 +6,15 @@ const fmt = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v)) ? '
 const pct = (v, d = 1) => (v === null || v === undefined) ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(d) + '%';
 const cls = (v) => v >= 0 ? 'up' : 'down';
 
+/* 服务端已把技术异常换成中文文案，这里再兜一层：
+   任何异常类型名、英文报错、堆栈、HTTP 状态码都不许出现在界面上。 */
+const TECH = /TypeError|ValueError|KeyError|IndexError|AttributeError|RuntimeError|JSONDecode|Traceback|Exception|\bError\b|list indices|object has no attribute|could not convert|invalid literal|NoneType|not defined|unsupported operand|object of type|urllib|socket|ENOENT|EADDRINUSE|ECONN|Failed to fetch|NetworkError|HTTP \d{3}|127\.0\.0\.1:\d+/i;
+function cleanError(msg) {
+  const s = (msg === undefined || msg === null) ? '' : String(msg).trim();
+  if (!s || TECH.test(s)) return '暂时没拿到数据，请稍后重试或换个代码';
+  return s;
+}
+
 const STATE = { data: null, code: new URLSearchParams(location.search).get('code')
   || localStorage.getItem('lf_code') || '600519', watch: [], tab: 'analysis' };
 
@@ -22,7 +31,7 @@ function toast(msg, ms = 2200) {
 async function api(path, opts) {
   const r = await fetch(path, opts);
   const j = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
-  if (!j.ok) throw new Error(j.error || '请求失败');
+  if (!j.ok) throw new Error(cleanError(j.error || j.message));
   return j;
 }
 
@@ -40,7 +49,7 @@ async function analyze(code) {
     $('status').innerHTML = `<b>${d.ctx.name}</b> 数据截至 ${d.ctx.last_date}<br>机械口径 · 人工复核筹码与题材`;
   } catch (e) {
     $('status').textContent = '出错了';
-    toast('分析失败：' + e.message, 4000);
+    toast('分析失败：' + cleanError(e.message), 4000);
   }
 }
 
@@ -329,7 +338,7 @@ async function renderWatchlist() {
       <th>BIAS60</th><th>命中模型</th><th>判定</th><th>仓位上限</th><th></th></tr></thead><tbody>`;
     rows.forEach((r, i) => {
       if (r.error) {
-        html += `<tr><td>${i + 1}</td><td colspan="9" class="empty-note">${r.code} 读取失败：${r.error}</td><td></td></tr>`;
+        html += `<tr><td>${i + 1}</td><td colspan="9" class="empty-note">${r.code} 读取失败：${cleanError(r.error)}</td><td></td></tr>`;
         return;
       }
       const tcls = r.trend === '多头排列' ? 'bull' : r.trend === '空头排列' ? 'bear' : '';
@@ -369,7 +378,7 @@ async function renderWatchlist() {
       });
     });
   } catch (e) {
-    tbl.innerHTML = `<tr><td class="empty-note">加载失败：${e.message}</td></tr>`;
+    tbl.innerHTML = `<tr><td class="empty-note">加载失败：${cleanError(e.message)}</td></tr>`;
   }
 }
 
@@ -401,7 +410,7 @@ async function renderPositions() {
     </tr></thead><tbody>`;
     d.rows.forEach((r) => {
       if (r.error) {
-        html += `<tr><td colspan="11" class="empty-note">${r.code} 读取失败：${r.error}</td></tr>`;
+        html += `<tr><td colspan="11" class="empty-note">${r.code} 读取失败：${cleanError(r.error)}</td></tr>`;
         return;
       }
       const cls = r.tone === 'bad' ? 'alert-row' : '';
@@ -444,7 +453,7 @@ async function renderPositions() {
       });
     });
   } catch (e) {
-    tbl.innerHTML = `<tr><td class="empty-note">加载失败：${e.message}</td></tr>`;
+    tbl.innerHTML = `<tr><td class="empty-note">加载失败：${cleanError(e.message)}</td></tr>`;
   }
 }
 
@@ -479,7 +488,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       await loadWatchlist();
       toast('已加入自选：' + code);
-    } catch (e) { toast('加入失败：' + e.message); }
+    } catch (e) { toast('加入失败：' + cleanError(e.message)); }
   });
 
   $('wlAddBtn').addEventListener('click', async () => {
@@ -496,7 +505,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       await loadWatchlist();
       renderWatchlist();
       toast('已加入 ' + codes.length + ' 只');
-    } catch (e) { toast('加入失败：' + e.message); }
+    } catch (e) { toast('加入失败：' + cleanError(e.message)); }
   });
   $('wlRefresh').addEventListener('click', renderWatchlist);
 
@@ -513,7 +522,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       toast(`已建仓 ${r.entry.name}：锁定止损 ${r.entry.entry_stop}`);
       $('posCode').value = ''; $('posCost').value = ''; $('posWeight').value = '';
       renderPositions();
-    } catch (e) { toast('建仓失败：' + e.message); }
+    } catch (e) { toast('建仓失败：' + cleanError(e.message)); }
   });
 
   await loadWatchlist();

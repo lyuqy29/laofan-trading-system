@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
+import http.client
 import json
+import urllib.error
 import urllib.request
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -14,17 +16,30 @@ API = ("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
        "?param={sym},day,,,{n},qfq")
 
 
+class DataSourceError(RuntimeError):
+    """行情数据源错误。
+
+    message 直接面向用户展示：中文、可操作，不含异常类型、堆栈等技术细节。
+    其他异常一律由 server 层换成通用文案，只写日志。
+    """
+
+
 def symbol_of(code: str) -> str:
-    code = code.strip().lower().replace(".", "")
-    if code[:2] in ("sh", "sz", "bj"):
-        return code
-    if code.startswith(("60", "68", "90", "51", "58", "11")):
-        return "sh" + code
-    if code.startswith(("00", "30", "20", "15", "12", "16", "39")):
-        return "sz" + code
-    if code.startswith(("43", "83", "87", "92")):
-        return "bj" + code
-    raise ValueError(f"无法识别代码: {code}")
+    """代码 → 腾讯符号（sh600519）。非法代码抛 DataSourceError 而不是 ValueError。"""
+    raw = str(code or "").strip().lower().replace(".", "").replace(" ", "")
+    if raw[:2] in ("sh", "sz", "bj"):
+        prefix, base = raw[:2], raw[2:]
+    elif raw[:2] in ("60", "68", "90", "51", "58", "11"):
+        prefix, base = "sh", raw
+    elif raw[:2] in ("00", "30", "20", "15", "12", "16", "39"):
+        prefix, base = "sz", raw
+    elif raw[:2] in ("43", "83", "87", "92"):
+        prefix, base = "bj", raw
+    else:
+        raise DataSourceError("请输入 6 位 A 股代码（一次一个），例如 600519")
+    if len(base) != 6 or not base.isdigit():
+        raise DataSourceError("请输入 6 位 A 股代码（一次一个），例如 600519")
+    return prefix + base
 
 
 def limit_pct(sym: str, name: str = "") -> float:
@@ -43,20 +58,46 @@ def fetch(code: str, bars: int = 320) -> dict:
     req = urllib.request.Request(
         API.format(sym=sym, n=bars),
         headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"})
-    raw = json.loads(urllib.request.urlopen(req, timeout=20).read().decode())
+    try:
+        payload = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
+    except (urllib.error.URLError, http.client.HTTPException, OSError, TimeoutError):
+        raise DataSourceError("行情接口暂时连不上，请检查网络后重试") from None
+    try:
+        raw = json.loads(payload)
+    except ValueError:
+        raise DataSourceError("行情接口返回内容异常，请稍后重试") from None
+    if not isinstance(raw, dict):
+        raise DataSourceError("行情接口返回内容异常，请稍后重试")
     if raw.get("code") != 0:
-        raise RuntimeError(f"接口错误 code={raw.get('code')}")
-    node = raw["data"][sym]
-    qt = (node.get("qt") or {}).get(sym) or []
-    name = qt[1] if len(qt) > 1 else sym.upper()
+        raise DataSourceError("数据源查不到这个代码，请确认代码是否正确")
+
+    data = raw.get("data")
+    node = data.get(sym) if isinstance(data, dict) else None
+    if not isinstance(node, dict):
+        raise DataSourceError("数据源查不到这个代码，请确认代码是否正确，或该标的暂不支持")
+
+    qt = node.get("qt")
+    if isinstance(qt, dict):
+        qt = qt.get(sym)
+    qt = qt if isinstance(qt, (list, tuple)) else []
+    name = qt[1] if len(qt) > 1 and isinstance(qt[1], str) and qt[1].strip() else sym.upper()
+
     rows = node.get("qfqday") or node.get("day") or []
-    bars_out = [{"dt": r[0], "o": float(r[1]), "c": float(r[2]),
-                 "h": float(r[3]), "l": float(r[4]), "v": float(r[5])}
-                for r in rows]
+    if not isinstance(rows, list):
+        raise DataSourceError("数据源返回结构异常，请稍后重试")
+    bars_out = []
+    for r in rows:
+        if not isinstance(r, (list, tuple)) or len(r) < 6:
+            continue
+        try:
+            bars_out.append({"dt": str(r[0]), "o": float(r[1]), "c": float(r[2]),
+                             "h": float(r[3]), "l": float(r[4]), "v": float(r[5])})
+        except (TypeError, ValueError):
+            continue
     if len(bars_out) < 70:
-        raise RuntimeError(
-            f"{name} 仅有 {len(bars_out)} 根日 K，无法做中期均线分析"
-            "（北交所老代码、退市或数据源不支持，请用主板/创业板/科创板代码）")
+        raise DataSourceError(
+            f"{name} 只有 {len(bars_out)} 根日 K，不足以做中期均线分析"
+            "（新股、长期停牌或数据源暂不支持该代码）")
     return {"symbol": sym, "name": name, "bars": bars_out}
 
 
