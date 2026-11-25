@@ -14,7 +14,7 @@
     <div class="logo">溜</div>
     <div>
       <h1>溜溜交易手册</h1>
-      <p>溜溜的后花园之量价时空体系 · 九大模型 · 止损纪律</p>
+      <p>量价时空（九大模型） · 梅森体系（时机/买点/纪律）</p>
     </div>
   </div>
   <div class="search">
@@ -22,10 +22,14 @@
     <button class="primary" id="goBtn">分析</button>
     <button class="ghost" id="addBtn" title="加入自选">+ 自选</button>
   </div>
+  <div class="sysswitch" id="sysSwitch">
+    <button class="active" data-sys="lf">量价时空</button>
+    <button data-sys="ms">梅森体系</button>
+  </div>
   <div class="status" id="status">就绪</div>
 </header>
 
-<nav class="tabs">
+<nav class="tabs" id="tabsLf">
   <button class="active" data-view="analysis">单票分析</button>
   <button data-view="watchlist">自选对比</button>
   <button data-view="positions">持仓管理</button>
@@ -251,9 +255,49 @@
       模型检测为机械口径，失败率天然存在（体系原话：模型不是 100% 胜率）。
     </div>
   </section>
+
+  <!-- ============ 梅森交易体系 ============ -->
+  <div id="msRoot" class="hidden">
+    <nav class="tabs" id="msTabs">
+      <button class="active" data-ms="timing">大盘时机</button>
+      <button data-ms="sectors">主线板块</button>
+      <button data-ms="stock">个股位置</button>
+      <button data-ms="plan">交易计划</button>
+      <button data-ms="check">体系自检</button>
+      <span class="msstatus" id="msStatus">梅森体系</span>
+    </nav>
+
+    <section class="msview active" id="msview-timing">
+      <div id="msTimingBody"></div>
+    </section>
+
+    <section class="msview" id="msview-sectors">
+      <div id="msSectorsBody"></div>
+    </section>
+
+    <section class="msview" id="msview-stock">
+      <div class="card">
+        <h3>个股位置判断 <span class="tag">均线三态 · 三大买点 · 止损与仓位</span></h3>
+        <div class="mssearch">
+          <input id="msCode" placeholder="输入代码，如 601985 / 688172 / sh600519" autocomplete="off">
+          <button class="primary" id="msGoBtn">按体系判断</button>
+        </div>
+      </div>
+      <div id="msStockBody"></div>
+    </section>
+
+    <section class="msview" id="msview-plan">
+      <div id="msPlanBody"></div>
+    </section>
+
+    <section class="msview" id="msview-check">
+      <div id="msCheckBody"></div>
+    </section>
+  </div>
 </main>
 
 <div class="toast" id="toast"></div>
 <script src="/app.js"></script>
+<script src="/ms.js"></script>
 </body>
 </html>

@@ -28,6 +28,7 @@ sys.path.insert(0, HERE)
 
 import market          # noqa: E402
 import models          # noqa: E402
+import ms_engine as ms # noqa: E402  梅森体系引擎
 
 WEB = os.path.join(HERE, "web")
 DATA = os.path.join(HERE, "data")
@@ -252,6 +253,18 @@ class Handler(SimpleHTTPRequestHandler):
                 rows.sort(key=lambda r: STATUS_ORDER.index(r["status"]) if "status" in r else 99)
                 return self._json({"ok": True, "rows": rows,
                                    "summary": positions_summary(rows)})
+            # ---- 梅森交易体系
+            if u.path == "/api/ms/overview":
+                return self._json({"ok": True, **ms.overview()})
+            if u.path == "/api/ms/sectors":
+                return self._json({"ok": True, **ms.sectors()})
+            if u.path == "/api/ms/stock":
+                code = (q.get("code") or [""])[0].strip()
+                if not code:
+                    return self._err("缺少 code 参数")
+                return self._json({"ok": True, **ms.stock(code)})
+            if u.path == "/api/ms/plan":
+                return self._json(ms.plan())
             if u.path.startswith("/api/"):
                 return self._err("未知接口", 404)
         except Exception as exc:  # noqa: BLE001
