@@ -474,7 +474,7 @@
     const topRows = (d.topT || []).map((c) => `
       <tr>
         <td class="mono">${c.t.slice(0, 2)}:${c.t.slice(2)}</td>
-        <td class="mono">${fmt(c.price)}</td>
+        <td class="mono ${c.chg >= 0 ? 'up' : 'down'}"${Math.abs(c.chg) >= 1 ? ' style="font-weight:700"' : ''}>${fmt(c.price)}</td>
         <td class="mono ${c.chg >= 0 ? 'up' : 'down'}">${c.chg >= 0 ? '+' : ''}${c.chg}%</td>
         <td class="mono">${c.vmul}×</td>
         <td class="mono ${(c.index_pct || 0) >= 0 ? 'up' : 'down'}">${c.index_pct === null ? '—' : c.index_pct + '%'}</td>
@@ -484,6 +484,7 @@
       </tr>`).join('');
     const sigRows = (d.signals || []).slice(-12).reverse().map((s) => `
       <li><span class="mono">${s.t.slice(0, 2)}:${s.t.slice(2)}</span>
+      <span class="mono" style="color:var(--gold)">${fmt(s.price)}</span>
       <span class="pill ${s.tone}">${esc(s.kind)}</span> ${esc(s.text)}</li>`).join('')
       || '<li class="empty-note">今日没有触发急涨急跌类信号（振幅太小或没放量）</li>';
 
