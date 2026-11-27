@@ -343,3 +343,13 @@ tr.msedit td { background: rgba(59,130,246,.06); }
 .mslive label { display:flex; align-items:center; gap:6px; cursor:pointer; color:var(--dim); }
 .mslive input[type=checkbox] { accent-color:#53a6ff; cursor:pointer; }
 .mslive button { padding:4px 10px; font-size:12px; }
+
+/* 日内做T：急涨急杀整行底色高亮（红涨绿跌，A股口径） */
+.mstable tr.hot td { background: rgba(240,68,56,.055); }
+.mstable tr.hot-down td { background: rgba(18,183,106,.055); }
+.mstable tr.hot:hover td { background: rgba(240,68,56,.10); }
+.mstable tr.hot-down:hover td { background: rgba(18,183,106,.10); }
+
+/* 位阶表：现价贴住某条支撑/压力时用金色底提示（与急涨急杀的红绿底区分开） */
+.mstable tr.atlevel td { background: rgba(253,176,34,.075); }
+.mstable tr.atlevel:hover td { background: rgba(253,176,34,.13); }

@@ -623,10 +623,39 @@ def plan() -> dict:
 
 # ---------------------------------------------------------------- 日内做T
 MIN = "https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={sym}"
+# 同一份分时数据在 proxy 上另有一个入口，结构完全一致（data.<sym>.data.data / .qt）
+MIN_PROXY = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/minute/query?code={sym}"
+_MWAF_UNTIL = 0.0
+_WAF_BLOCK_SECONDS = 600
+
+
+def _minute_json(sym: str) -> dict:
+    """取分时 JSON：主入口被反爬 WAF 拦（403/429/501）时自动切备用，并记住被拦的这段时间。"""
+    global _MWAF_UNTIL
+    order = [MIN, MIN_PROXY]
+    if _MWAF_UNTIL > time.time():
+        order.reverse()
+    blocked, last = False, None
+    for tmpl in order:
+        try:
+            req = urllib.request.Request(
+                tmpl.format(sym=sym),
+                headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"})
+            return json.loads(urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore"))
+        except urllib.error.HTTPError as exc:
+            if exc.code in (403, 429, 501):
+                blocked = True
+                _MWAF_UNTIL = time.time() + _WAF_BLOCK_SECONDS
+            last = exc
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+    if blocked:
+        raise DataError("分时数据被限流，两个通道都没取到，请稍后重试")
+    raise DataError(f"分时获取失败（{type(last).__name__}），请稍后重试")
 
 
 def _minute(sym: str) -> dict:
-    d = _get(MIN.format(sym=sym), "https://gu.qq.com/")
+    d = _minute_json(sym)
     node = (d.get("data") or {}).get(sym) or {}
     inner = node.get("data") or {}
     rows = inner.get("data") or []
@@ -773,7 +802,7 @@ def intraday(code: str) -> dict:
             st = stock(code)
             state, d20 = st["state"], st["dist_ma20"]
         except Exception:  # noqa: BLE001
-            state, d20 = "—", None
+            state, d20, st = "—", None, {}
         amount_yi = round(amt / 1e8, 2)
         tags = []
         if amp >= 2:
@@ -819,9 +848,41 @@ def intraday(code: str) -> dict:
             except (TypeError, ValueError):
                 position = None
 
+        # 支撑 / 压力位：做T要贴着位阶做，脱离位阶的急涨急杀不做
+        # 口径：分时均价（最贴身）+ MA5/MA10/MA20（10-ma-trend）+ 今日低 + 昨收
+        now_price = pts[-1]["price"]
+
+        def _lv(label, price, kind="ma"):
+            try:
+                p = float(price)
+            except (TypeError, ValueError):
+                return None
+            if p <= 0:
+                return None
+            return {"name": label, "price": round(p, 2), "kind": kind,
+                    "dist": round((p / now_price - 1) * 100, 2) if now_price else None}
+
+        raw_levels = [
+            _lv("分时均价", pts[-1].get("avg"), "avg"),
+            _lv("MA5", st.get("ma5")),
+            _lv("MA10", st.get("ma10")),
+            _lv("MA20", st.get("ma20")),
+            _lv("今日最低", low, "intraday"),
+            _lv("昨收", prev, "prev"),
+        ]
+        levels, seen = [], []
+        for lv in sorted([x for x in raw_levels if x], key=lambda z: -z["price"]):
+            if any(abs(lv["price"] - s) / s < 0.003 for s in seen):
+                continue          # 价格太接近的位阶合并，避免一堵墙上标 4 条线
+            seen.append(lv["price"])
+            levels.append(lv)
+        for lv in levels:
+            lv["side"] = "support" if lv["price"] <= now_price else "resist"
+
         return {
             "code": sym[2:], "name": m["name"], "date": m["date"], "prev_close": prev,
             "position": position,
+            "levels": levels,
             "last": pts[-1]["price"], "chg": round((pts[-1]["price"] / prev - 1) * 100, 2) if prev else 0,
             "high": high, "low": low, "amp": round(amp, 2), "amount_yi": amount_yi,
             "state": state, "dist_ma20": d20, "score": score, "tags": tags,

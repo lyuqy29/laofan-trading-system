@@ -16,7 +16,7 @@
     .split(/\s+/).filter(Boolean);
   const FEATURES = { plan: !HIDDEN.includes('plan'), news: !HIDDEN.includes('news') };
 
-  const BUILD = '1127-1022';
+  const BUILD = '1127-1132';
   const ST = { view: 'timing', ov: null, sec: null, plan: null, stock: null, min: null, minAt: 0,
                auto: localStorage.getItem('ms_auto') !== '0', minTimer: null, minBusy: false,
                code: localStorage.getItem('ms_code') || '601985' };
@@ -471,22 +471,59 @@
       ? `早盘最低 ${early.stock_pct}% / 大盘 ${early.index_pct === null ? '—' : early.index_pct + '%'} → `
         + (early.ok ? '<b class="up">满足「早盘双杀」做T式加仓前置</b>' : '<b class="down">不满足双杀条件</b>')
       : '无早盘数据';
-    const topRows = (d.topT || []).map((c) => `
-      <tr>
+    const ptMap = new Map((d.points || []).map((p) => [p.t, p]));
+    const levels = d.levels || [];
+    const nearest = (price) => {
+      let best = null;
+      levels.forEach((lv) => {
+        if (lv.price > price) return;            // 只看下方支撑
+        const dist = (price / lv.price - 1) * 100;
+        if (!best || dist < best.dist) best = { name: lv.name, price: lv.price, dist };
+      });
+      return best;
+    };
+    const topRows = (d.topT || []).map((c) => {
+      const hot = Math.abs(c.chg) >= 1;
+      const cls = hot ? `hot ${c.chg >= 0 ? 'hot-up' : 'hot-down'}` : '';
+      const pt = ptMap.get(c.t);
+      const devAvg = pt && pt.avg ? (c.price / pt.avg - 1) * 100 : null;
+      const sup = nearest(c.price);
+      return `
+      <tr class="${cls}">
         <td class="mono">${c.t.slice(0, 2)}:${c.t.slice(2)}</td>
-        <td class="mono ${c.chg >= 0 ? 'up' : 'down'}"${Math.abs(c.chg) >= 1 ? ' style="font-weight:700"' : ''}>${fmt(c.price)}</td>
+        <td class="mono ${c.chg >= 0 ? 'up' : 'down'}">${fmt(c.price)}</td>
         <td class="mono ${c.chg >= 0 ? 'up' : 'down'}">${c.chg >= 0 ? '+' : ''}${c.chg}%</td>
         <td class="mono">${c.vmul}×</td>
+        <td class="mono ${devAvg === null ? '' : devAvg >= 0 ? 'up' : 'down'}">${
+          devAvg === null ? '—' : (devAvg >= 0 ? '+' : '') + devAvg.toFixed(2) + '%'}</td>
         <td class="mono ${(c.index_pct || 0) >= 0 ? 'up' : 'down'}">${c.index_pct === null ? '—' : c.index_pct + '%'}</td>
+        <td>${sup ? `<span class="empty-note">${esc(sup.name)} −${sup.dist.toFixed(1)}%</span>` : '—'}</td>
         <td>${c.dir === 'down'
           ? (c.index_pct !== null && c.index_pct <= -0.3 ? '<span class="pill good">正T买点候选</span>' : '<span class="pill bad">独立杀跌·不做</span>')
           : '<span class="pill warn">T 出参考</span>'}</td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
     const sigRows = (d.signals || []).slice(-12).reverse().map((s) => `
       <li><span class="mono">${s.t.slice(0, 2)}:${s.t.slice(2)}</span>
       <span class="mono" style="color:var(--gold)">${fmt(s.price)}</span>
       <span class="pill ${s.tone}">${esc(s.kind)}</span> ${esc(s.text)}</li>`).join('')
       || '<li class="empty-note">今日没有触发急涨急跌类信号（振幅太小或没放量）</li>';
+
+    const nearestBelow = nearest(d.last);
+    const levelRows = levels.map((lv) => {
+      const isSup = lv.side === 'support';
+      const thin = Math.abs(lv.dist) <= 0.5;
+      const meaning = isSup
+        ? (thin ? '贴住支撑，跌破即失效' : '回踩这里是接回位置')
+        : (thin ? '贴住压力，冲不过就T出' : '反弹到这里考虑T出');
+      return `<tr${thin ? ' class="atlevel"' : ''}>
+        <td>${esc(lv.name)}</td>
+        <td class="mono">${fmt(lv.price)}</td>
+        <td class="mono ${lv.dist >= 0 ? 'up' : 'down'}">${lv.dist >= 0 ? '+' : ''}${fmt(lv.dist)}%</td>
+        <td>${isSup ? '<span class="pill good">支撑</span>' : '<span class="pill warn">压力</span>'}</td>
+        <td class="empty-note">${meaning}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="5" class="empty-note">位阶数据不足（日线 MA 取不到）</td></tr>';
 
     $('msTBody').innerHTML = `
       <div class="card">
@@ -507,14 +544,23 @@
       </div>
       ${posHtml(d)}
       <div class="card">
-        <h3>分时走势 <span class="tag">白=价格 黄=均价 柱=分钟量 紫=上证涨跌</span></h3>
+        <h3>分时走势 <span class="tag">白=价格 黄=均价 柱=分钟量 紫=上证涨跌 虚线=支撑/压力</span></h3>
         <canvas id="msTChart" height="320" style="width:100%"></canvas>
+      </div>
+      <div class="card">
+        <h3>支撑 · 压力位 <span class="tag">贴着位阶做T：跌破支撑不做多T</span></h3>
+        <table class="mstable"><thead><tr><th>位阶</th><th>价格</th><th>距现价</th><th>性质</th><th>当下含义</th></tr></thead>
+        <tbody>${levelRows}</tbody></table>
+        <div class="empty-note" style="margin-top:8px">
+          口径：分时均价（最贴身）+ MA5/10/20（10-ma-trend）+ 今日最低 + 昨收，价格过于接近的位阶自动合并。
+          现价 ${fmt(d.last)}，最近的支撑是${nearestBelow ? ` <b>${esc(nearestBelow.name)} ${fmt(nearestBelow.price)}（−${nearestBelow.dist.toFixed(1)}%）</b>` : '无（已跌破全部位阶）'}。
+        </div>
       </div>
       <div class="grid2">
         <div class="card">
-          <h3>当日最强 T 机会 <span class="tag">|涨跌| × 量能倍数</span></h3>
-          <table class="mstable"><thead><tr><th>时间</th><th>价格</th><th>分钟涨跌</th><th>量比</th><th>大盘</th><th>判定</th></tr></thead>
-          <tbody>${topRows || '<tr><td colspan="6" class="empty-note">无</td></tr>'}</tbody></table>
+          <h3>当日最强 T 机会 <span class="tag">|涨跌| × 量能倍数 · 底色 = 急涨急杀（|涨跌| ≥ 1%）</span></h3>
+          <table class="mstable"><thead><tr><th>时间</th><th>价格</th><th>分钟涨跌</th><th>量比</th><th>距均价</th><th>大盘</th><th>下方支撑</th><th>判定</th></tr></thead>
+          <tbody>${topRows || '<tr><td colspan="8" class="empty-note">无</td></tr>'}</tbody></table>
           <div class="empty-note" style="margin-top:8px">${earlyTxt}</div>
         </div>
         <div class="card">
@@ -661,6 +707,20 @@
       ctx.fillText(`${(-maxAbs).toFixed(1)}%`, 4, idxTop + idxH - 4);
       ctx.fillText(`+${maxAbs.toFixed(1)}%`, 4, idxTop + 8);
     }
+
+    // 支撑 / 压力位：只画落在价格区间的线，避免把图压扁
+    const lvIn = (d.levels || []).filter((lv) => lv.price >= pmin - pad && lv.price <= pmax + pad);
+    lvIn.forEach((lv) => {
+      const y = ps(lv.price);
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = lv.side === 'support' ? 'rgba(61,220,151,.45)' : 'rgba(240,68,56,.45)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(44, y); ctx.lineTo(w - 48, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = lv.side === 'support' ? 'rgba(61,220,151,.85)' : 'rgba(255,138,128,.9)';
+      ctx.font = '10px monospace';
+      ctx.fillText(`${lv.name} ${lv.price}`, w - 92, y - 3);
+    });
 
     // 均价线
     ctx.strokeStyle = '#f6c85f'; ctx.lineWidth = 1.2; ctx.beginPath();
