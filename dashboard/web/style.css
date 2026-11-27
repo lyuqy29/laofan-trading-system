@@ -271,6 +271,10 @@ tr.alert-row td { background: rgba(240, 68, 56, .05); }
 .msstats b { font-size: 14px; font-weight: 600; }
 .msstats span { font-size: 11px; color: #7c8ab0; }
 
+/* 涨跌文字色：红涨绿跌（.up/.down 之前只有背景规则，表格里一直是白字） */
+.up { color: var(--up); }
+.down { color: var(--down); }
+
 .mstable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .mstable th { text-align: left; color: #7c8ab0; font-weight: 500; padding: 8px 6px; border-bottom: 1px solid #232b45; white-space: nowrap; }
 .mstable td { padding: 8px 6px; border-bottom: 1px solid #1b2237; }
