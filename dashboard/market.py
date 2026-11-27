@@ -7,13 +7,23 @@ from __future__ import annotations
 
 import http.client
 import json
+import sys
+import time
 import urllib.error
 import urllib.request
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36")
-API = ("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-       "?param={sym},day,,,{n},qfq")
+
+# 同一份前复权日 K 有两个腾讯入口，返回结构一致（都带 qfqday / day 与 qt 名称）：
+#   1) web.ifzq.gtimg.cn   —— 日常最快，但会触发反爬 WAF：直接返回 501（2026-11 起开始出现）
+#   2) proxy.finance.qq.com —— 稍慢，作为备用通道
+API_PRIMARY = ("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+               "?param={sym},day,,,{n},qfq")
+API_BACKUP = ("https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
+              "?param={sym},day,,,{n},qfq")
+WAF_BLOCK_SECONDS = 600          # 主入口被 WAF 拦后，10 分钟内优先走备用
+_waf_blocked_until = 0.0
 
 
 class DataSourceError(RuntimeError):
@@ -53,23 +63,52 @@ def limit_pct(sym: str, name: str = "") -> float:
     return 10.0
 
 
+def _request_json(sym: str, bars: int) -> dict:
+    """取一次日 K JSON；主入口被 WAF 拦时自动切备用入口，并记住被拦的这段时间。"""
+    global _waf_blocked_until
+    now = time.time()
+    order = [API_PRIMARY, API_BACKUP]
+    if _waf_blocked_until > now:
+        order.reverse()
+    last_kind = "net"
+    for tmpl in order:
+        req = urllib.request.Request(
+            tmpl.format(sym=sym, n=bars),
+            headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"})
+        try:
+            payload = urllib.request.urlopen(req, timeout=20).read()
+        except urllib.error.HTTPError as exc:
+            if exc.code in (403, 429, 501):
+                _waf_blocked_until = now + WAF_BLOCK_SECONDS
+                sys.stderr.write(
+                    f"[market] {tmpl.split('/')[2]} -> HTTP {exc.code} (WAF)，"
+                    f"切备用入口 {WAF_BLOCK_SECONDS}s\n")
+                last_kind = "blocked"
+            else:
+                last_kind = "http"
+            continue
+        except (urllib.error.URLError, http.client.HTTPException, OSError, TimeoutError):
+            last_kind = "net"
+            continue
+        try:
+            data = json.loads(payload.decode("utf-8", "replace"))
+        except ValueError:
+            last_kind = "parse"
+            continue
+        if isinstance(data, dict) and data.get("code") == 0:
+            return data
+        last_kind = "parse"
+
+    if last_kind == "blocked":
+        raise DataSourceError("行情接口被限流，已切备用通道仍未取到数据，请稍后重试")
+    if last_kind == "parse":
+        raise DataSourceError("行情接口返回内容异常，请稍后重试")
+    raise DataSourceError("行情接口暂时连不上，请检查网络后重试")
+
+
 def fetch(code: str, bars: int = 320) -> dict:
     sym = symbol_of(code)
-    req = urllib.request.Request(
-        API.format(sym=sym, n=bars),
-        headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"})
-    try:
-        payload = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
-    except (urllib.error.URLError, http.client.HTTPException, OSError, TimeoutError):
-        raise DataSourceError("行情接口暂时连不上，请检查网络后重试") from None
-    try:
-        raw = json.loads(payload)
-    except ValueError:
-        raise DataSourceError("行情接口返回内容异常，请稍后重试") from None
-    if not isinstance(raw, dict):
-        raise DataSourceError("行情接口返回内容异常，请稍后重试")
-    if raw.get("code") != 0:
-        raise DataSourceError("数据源查不到这个代码，请确认代码是否正确")
+    raw = _request_json(sym, bars)
 
     data = raw.get("data")
     node = data.get(sym) if isinstance(data, dict) else None

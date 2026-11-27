@@ -88,7 +88,7 @@ def compare(codes: list[str]) -> dict:
     """多票横向对比。并发拉取，最多 MAX_COMPARE 只，返回真实总数便于前端提示。"""
     total = len(codes)
     codes = codes[:MAX_COMPARE]
-    workers = max(1, min(8, len(codes)))
+    workers = max(1, min(4, len(codes)))
 
     def one(c):
         try:
