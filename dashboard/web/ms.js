@@ -16,7 +16,7 @@
     .split(/\s+/).filter(Boolean);
   const FEATURES = { plan: !HIDDEN.includes('plan'), news: !HIDDEN.includes('news') };
 
-  const BUILD = '1127-1000';
+  const BUILD = '1127-1022';
   const ST = { view: 'timing', ov: null, sec: null, plan: null, stock: null, min: null, minAt: 0,
                auto: localStorage.getItem('ms_auto') !== '0', minTimer: null, minBusy: false,
                code: localStorage.getItem('ms_code') || '601985' };
@@ -474,6 +474,7 @@
     const topRows = (d.topT || []).map((c) => `
       <tr>
         <td class="mono">${c.t.slice(0, 2)}:${c.t.slice(2)}</td>
+        <td class="mono">${fmt(c.price)}</td>
         <td class="mono ${c.chg >= 0 ? 'up' : 'down'}">${c.chg >= 0 ? '+' : ''}${c.chg}%</td>
         <td class="mono">${c.vmul}×</td>
         <td class="mono ${(c.index_pct || 0) >= 0 ? 'up' : 'down'}">${c.index_pct === null ? '—' : c.index_pct + '%'}</td>
@@ -511,8 +512,8 @@
       <div class="grid2">
         <div class="card">
           <h3>当日最强 T 机会 <span class="tag">|涨跌| × 量能倍数</span></h3>
-          <table class="mstable"><thead><tr><th>时间</th><th>分钟涨跌</th><th>量比</th><th>大盘</th><th>判定</th></tr></thead>
-          <tbody>${topRows || '<tr><td colspan="5" class="empty-note">无</td></tr>'}</tbody></table>
+          <table class="mstable"><thead><tr><th>时间</th><th>价格</th><th>分钟涨跌</th><th>量比</th><th>大盘</th><th>判定</th></tr></thead>
+          <tbody>${topRows || '<tr><td colspan="6" class="empty-note">无</td></tr>'}</tbody></table>
           <div class="empty-note" style="margin-top:8px">${earlyTxt}</div>
         </div>
         <div class="card">
