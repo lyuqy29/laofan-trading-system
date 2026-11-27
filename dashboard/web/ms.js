@@ -16,8 +16,10 @@
     .split(/\s+/).filter(Boolean);
   const FEATURES = { plan: !HIDDEN.includes('plan'), news: !HIDDEN.includes('news') };
 
-  const BUILD = '1126-2351';
-  const ST = { view: 'timing', ov: null, sec: null, plan: null, stock: null, code: localStorage.getItem('ms_code') || '601985' };
+  const BUILD = '1127-1000';
+  const ST = { view: 'timing', ov: null, sec: null, plan: null, stock: null, min: null, minAt: 0,
+               auto: localStorage.getItem('ms_auto') !== '0', minTimer: null, minBusy: false,
+               code: localStorage.getItem('ms_code') || '601985' };
 
   async function api(path, opts) {
     const r = await fetch(path, opts);
@@ -82,7 +84,7 @@
     document.querySelectorAll('.msview').forEach((s) => s.classList.toggle('active', s.id === 'msview-' + view));
     if (view === 'sectors' && !ST.sec) loadSectors();
     if (view === 'plan' && FEATURES.plan && !ST.plan) loadPlan();
-    if (view === 'intraday' && !ST.min) analyzeIntraday(ST.code);
+    if (view === 'intraday' && !minFresh()) analyzeIntraday(ST.code, !!ST.min);
     if (window.MSOnView) { try { window.MSOnView(view); } catch (e) { /* noop */ } }
     if (view === 'timing' && !ST.ov) loadOverview();
   }
@@ -402,21 +404,67 @@
   }
 
   /* ------------------------------------------------ 日内做T */
-  async function analyzeIntraday(code) {
-    if (!code) return;
-    $('msTBody').innerHTML = '<div class="empty-note"><span class="loading"></span> 拉取分时…</div>';
+  // 自动刷新：数据是 1 分钟分时、服务端缓存 60 秒，所以 60 秒一次最合适；
+  // 只在交易时段、页面可见、且停留在做T页时刷新，避免把行情源刷成限流。
+  const MIN_TTL = 60000;
+  const TRADING_WINDOWS = [[925, 1135], [1255, 1505]];
+
+  function inTradingWindow(d = new Date()) {
+    const day = d.getDay();
+    if (day === 0 || day === 6) return false;            // 周末不开盘
+    const hm = d.getHours() * 100 + d.getMinutes();
+    return TRADING_WINDOWS.some(([a, b]) => hm >= a && hm <= b);
+  }
+
+  function minFresh() {
+    return !!ST.min && (Date.now() - ST.minAt) < MIN_TTL;
+  }
+
+  function tickIntraday() {
+    if (ST.view !== 'intraday' || document.hidden) return;
+    if (!ST.auto || !inTradingWindow() || minFresh()) return;
+    analyzeIntraday(ST.code, true);
+  }
+
+  function startIntradayTimer() {
+    if (ST.minTimer) return;
+    ST.minTimer = setInterval(tickIntraday, 20000);      // 每 20s 探一次，实际受 60s 新鲜度约束
+  }
+
+  async function analyzeIntraday(code, silent) {
+    if (!code || ST.minBusy) return;          // 冷缓存首次可能要 30s+，避免定时器叠着发请求
+    ST.minBusy = true;
+    if (!silent) $('msTBody').innerHTML = '<div class="empty-note"><span class="loading"></span> 拉取分时…</div>';
     try {
-      ST.min = await api('/api/ms/intraday?code=' + encodeURIComponent(code));
-      ST.code = ST.min.code;
+      const d = await api('/api/ms/intraday?code=' + encodeURIComponent(code));
+      ST.min = d;
+      ST.minAt = Date.now();
+      ST.code = d.code;
       localStorage.setItem('ms_code', ST.code);
       renderIntraday();
     } catch (e) {
-      $('msTBody').innerHTML = `<div class="empty-note">取数失败：${esc(e.message)}</div>`;
+      if (silent) {
+        const el = $('msTStamp');
+        if (el) el.textContent = '刷新失败，稍后重试';
+      } else {
+        $('msTBody').innerHTML = `<div class="empty-note">取数失败：${esc(e.message)}</div>`;
+      }
+    } finally {
+      ST.minBusy = false;
     }
   }
 
   function renderIntraday() {
     const d = ST.min;
+    const stampEl = $('msTStamp');
+    if (stampEl) {
+      const ds = String(d.date || '');
+      const pts = d.points || [];
+      const t = pts.length ? String(pts[pts.length - 1].t).padStart(4, '0') : '';
+      const when = (ds.length === 8 ? `${ds.slice(4, 6)}-${ds.slice(6, 8)} ` : '')
+        + (t ? `${t.slice(0, 2)}:${t.slice(2)}` : '—');
+      stampEl.textContent = '最后更新 ' + when;
+    }
     const scoreTone = d.score >= 2 ? 'good' : d.score === 1 ? 'warn' : 'bad';
     const early = d.early;
     const earlyTxt = early
@@ -705,7 +753,22 @@
     $('msCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('msGoBtn').click(); });
     $('msCode').value = ST.code;
     $('msTCode').value = ST.code;
-    $('msTGo').addEventListener('click', () => analyzeIntraday($('msTCode').value.trim()));
+    $('msTGo').addEventListener('click', () => analyzeIntraday(($('msTCode').value.trim() || ST.code)));
+    $('msTRefresh').addEventListener('click', () => analyzeIntraday(ST.code, true));
+    const autoBox = $('msTAuto');
+    if (autoBox) {
+      autoBox.checked = ST.auto;
+      autoBox.addEventListener('change', () => {
+        ST.auto = autoBox.checked;
+        localStorage.setItem('ms_auto', ST.auto ? '1' : '0');
+        if (ST.auto && ST.view === 'intraday') analyzeIntraday(ST.code, true);
+        toast(ST.auto ? '自动刷新已开启（盘中每 60 秒）' : '自动刷新已关闭');
+      });
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && ST.view === 'intraday') analyzeIntraday(ST.code, true);
+    });
+    startIntradayTimer();
     $('plAdd').addEventListener('click', addPlanFromForm);
     $('msTCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('msTGo').click(); });
     renderChecklist();
